@@ -65,9 +65,9 @@ const EFFECTS: { id: EffectType; label: string; desc: string }[] = [
 export default function CameraPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const [effect, setEffect] = useState<EffectType>('none')
+  const [effect, setEffect] = useState<EffectType>('dither')
   const [params, setParams] = useState<EffectParams>(DEFAULT_PARAMS)
-  const effectRef = useRef<EffectType>('none')
+  const effectRef = useRef<EffectType>('dither')
   const paramsRef = useRef<EffectParams>(DEFAULT_PARAMS)
   const animationFrameRef = useRef<number>(0)
   const [countdown, setCountdown] = useState<number | null>(null)
