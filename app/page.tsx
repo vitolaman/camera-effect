@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Camera, Download } from 'lucide-react'
+import { Camera, Download, SlidersHorizontal, X } from 'lucide-react'
 
-type EffectType = 'none' | 'grayscale' | 'dither' | 'ascii' | 'pixelate'
+type EffectType = 'none' | 'grayscale' | 'dither' | 'ascii' | 'pixelate' | 'rgbshift'
 type AsciiCharMode = 'gradient' | 'numbers'
 type DitherMode = 'bayer' | 'halftone' | 'dotcross' | 'line'
 
@@ -30,6 +30,10 @@ interface EffectParams {
   asciiCharMode: AsciiCharMode
   asciiColor: string
   pixelSize: number
+  rgbShiftX: number
+  rgbShiftY: number
+  rgbGlitchLines: number
+  rgbScanlines: boolean
 }
 
 const DEFAULT_PARAMS: EffectParams = {
@@ -43,6 +47,10 @@ const DEFAULT_PARAMS: EffectParams = {
   asciiCharMode: 'gradient',
   asciiColor: '#00ff00',
   pixelSize: 8,
+  rgbShiftX: 8,
+  rgbShiftY: 2,
+  rgbGlitchLines: 4,
+  rgbScanlines: true,
 }
 
 const EFFECTS: { id: EffectType; label: string; desc: string }[] = [
@@ -51,6 +59,7 @@ const EFFECTS: { id: EffectType; label: string; desc: string }[] = [
   { id: 'dither',    label: 'Dither',    desc: 'Ordered Bayer matrix' },
   { id: 'ascii',     label: 'ASCII',     desc: 'Character art' },
   { id: 'pixelate',  label: 'Pixelate',  desc: 'Block averaging' },
+  { id: 'rgbshift',  label: 'RGB Shift', desc: 'Broken VHS channels' },
 ]
 
 export default function CameraPage() {
@@ -63,6 +72,7 @@ export default function CameraPage() {
   const animationFrameRef = useRef<number>(0)
   const [countdown, setCountdown] = useState<number | null>(null)
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => { effectRef.current = effect }, [effect])
   useEffect(() => { paramsRef.current = params }, [params])
@@ -115,8 +125,11 @@ export default function CameraPage() {
           canvas.height = video.videoHeight
         }
 
-        // Draw video to canvas
-        ctx.drawImage(video, 0, 0)
+        // Draw video to canvas (flipped horizontally to remove mirror effect)
+        ctx.save()
+        ctx.scale(-1, 1)
+        ctx.drawImage(video, -canvas.width, 0)
+        ctx.restore()
 
         // Apply selected effect using refs so no restart needed
         const currentEffect = effectRef.current
@@ -135,6 +148,8 @@ export default function CameraPage() {
           } else if (currentEffect === 'pixelate') {
             applyPixelate(imageData, canvas.width, canvas.height, p.pixelSize)
             ctx.putImageData(imageData, 0, 0)
+          } else if (currentEffect === 'rgbshift') {
+            applyRGBShift(ctx, canvas.width, canvas.height, p)
           }
         }
       }
@@ -176,265 +191,376 @@ export default function CameraPage() {
     }
   }, [])
 
+  const sidebarControls = (
+    <div className="flex-1 overflow-y-auto px-5 py-5 space-y-7">
+      {/* Effect selector */}
+      <section>
+        <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2.5">Effect</p>
+        <div className="space-y-0.5">
+          {EFFECTS.map(e => (
+            <button
+              key={e.id}
+              onClick={() => setEffect(e.id)}
+              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-md text-sm transition-all duration-150 ${
+                effect === e.id
+                  ? 'bg-white text-black font-medium'
+                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+              }`}
+            >
+              <span>{e.label}</span>
+              {effect === e.id && (
+                <span className="text-[11px] text-neutral-500 font-normal">{e.desc}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Per-effect parameters */}
+      {effect !== 'none' && (
+        <section>
+          <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-4">Parameters</p>
+          <div className="space-y-6">
+            {effect === 'grayscale' && (
+              <ParamSlider
+                label="Contrast"
+                hint="Amplifies difference from mid-gray"
+                value={params.grayscaleContrast}
+                min={0.5} max={2} step={0.05}
+                display={params.grayscaleContrast.toFixed(2) + '×'}
+                onChange={v => setParam('grayscaleContrast', v)}
+              />
+            )}
+            {effect === 'dither' && (
+              <>
+                <div>
+                  <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2">Mode</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {DITHER_MODES.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => setParam('ditherMode', m.id)}
+                        className={`px-2.5 py-1.5 rounded text-xs transition-all duration-150 ${
+                          params.ditherMode === m.id
+                            ? 'bg-white text-black font-medium'
+                            : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700 hover:text-white'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {params.ditherMode === 'bayer' && (
+                  <ParamSlider
+                    label="Threshold"
+                    hint="Bayer matrix sensitivity"
+                    value={params.ditherScale}
+                    min={0.1} max={2} step={0.05}
+                    display={params.ditherScale.toFixed(2) + '×'}
+                    onChange={v => setParam('ditherScale', v)}
+                  />
+                )}
+                {params.ditherMode !== 'bayer' && (
+                  <ParamSlider
+                    label="Cell Size"
+                    hint="Sampling grid resolution"
+                    value={params.ditherCellSize}
+                    min={4} max={32} step={2}
+                    display={params.ditherCellSize + 'px'}
+                    onChange={v => setParam('ditherCellSize', v)}
+                  />
+                )}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-neutral-200">Foreground</span>
+                    <span className="text-xs font-mono text-neutral-400">{params.ditherFgColor}</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <input type="color" value={params.ditherFgColor}
+                      onChange={e => setParam('ditherFgColor', e.target.value)}
+                      className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      {['#ffffff','#00ff00','#ff4444','#44aaff','#ffaa00','#ff44ff'].map(c => (
+                        <button key={c} onClick={() => setParam('ditherFgColor', c)} title={c}
+                          style={{ background: c }}
+                          className={`w-5 h-5 rounded-sm transition-all ${params.ditherFgColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-neutral-200">Background</span>
+                    <span className="text-xs font-mono text-neutral-400">{params.ditherBgColor}</span>
+                  </div>
+                  <div className="flex items-center gap-2.5">
+                    <input type="color" value={params.ditherBgColor}
+                      onChange={e => setParam('ditherBgColor', e.target.value)}
+                      className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      {['#000000','#0a0a0a','#001a00','#00001a','#1a0000','#1a001a'].map(c => (
+                        <button key={c} onClick={() => setParam('ditherBgColor', c)} title={c}
+                          style={{ background: c, border: '1px solid #333' }}
+                          className={`w-5 h-5 rounded-sm transition-all ${params.ditherBgColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+            {effect === 'ascii' && (
+              <>
+                <div>
+                  <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2">Char Set</p>
+                  <div className="grid grid-cols-2 gap-1">
+                    {ASCII_CHAR_MODES.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => setParam('asciiCharMode', m.id)}
+                        className={`px-2.5 py-1.5 rounded text-xs transition-all duration-150 ${
+                          params.asciiCharMode === m.id
+                            ? 'bg-white text-black font-medium'
+                            : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700 hover:text-white'
+                        }`}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm text-neutral-200">Font Color</span>
+                    <span className="text-xs font-mono text-neutral-400">{params.asciiColor}</span>
+                  </div>
+                  <p className="text-[11px] text-neutral-600 mb-2.5">Character fill color</p>
+                  <div className="flex items-center gap-2.5">
+                    <input type="color" value={params.asciiColor}
+                      onChange={e => setParam('asciiColor', e.target.value)}
+                      className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
+                    />
+                    <div className="flex gap-1.5 flex-wrap">
+                      {['#00ff00','#ffffff','#ff4444','#44aaff','#ffaa00','#ff44ff'].map(c => (
+                        <button key={c} onClick={() => setParam('asciiColor', c)} title={c}
+                          style={{ background: c }}
+                          className={`w-5 h-5 rounded-sm transition-all ${params.asciiColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                <ParamSlider
+                  label="Font Size"
+                  hint="Character cell resolution"
+                  value={params.asciiBlockSize}
+                  min={4} max={24} step={2}
+                  display={params.asciiBlockSize + 'px'}
+                  onChange={v => setParam('asciiBlockSize', v)}
+                />
+              </>
+            )}
+            {effect === 'pixelate' && (
+              <ParamSlider
+                label="Pixel Size"
+                hint="Block averaging resolution"
+                value={params.pixelSize}
+                min={2} max={64} step={2}
+                display={params.pixelSize + 'px'}
+                onChange={v => setParam('pixelSize', v)}
+              />
+            )}
+            {effect === 'rgbshift' && (
+              <>
+                <ParamSlider
+                  label="Horizontal Shift"
+                  hint="Channel offset on the X axis"
+                  value={params.rgbShiftX}
+                  min={0} max={40} step={1}
+                  display={params.rgbShiftX + 'px'}
+                  onChange={v => setParam('rgbShiftX', v)}
+                />
+                <ParamSlider
+                  label="Vertical Shift"
+                  hint="Channel offset on the Y axis"
+                  value={params.rgbShiftY}
+                  min={0} max={20} step={1}
+                  display={params.rgbShiftY + 'px'}
+                  onChange={v => setParam('rgbShiftY', v)}
+                />
+                <ParamSlider
+                  label="Glitch Lines"
+                  hint="Number of horizontal glitch slices"
+                  value={params.rgbGlitchLines}
+                  min={0} max={20} step={1}
+                  display={String(params.rgbGlitchLines)}
+                  onChange={v => setParam('rgbGlitchLines', v)}
+                />
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-neutral-200">Scanlines</p>
+                    <p className="text-[11px] text-neutral-600">CRT horizontal lines overlay</p>
+                  </div>
+                  <button
+                    onClick={() => setParam('rgbScanlines', !params.rgbScanlines)}
+                    className={`w-10 h-5.5 rounded-full relative transition-colors duration-200 ${params.rgbScanlines ? 'bg-white' : 'bg-neutral-700'}`}
+                    style={{ width: 36, height: 20 }}
+                  >
+                    <span
+                      className="absolute top-0.5 rounded-full bg-black transition-transform duration-200"
+                      style={{ width: 16, height: 16, left: 2, transform: params.rgbScanlines ? 'translateX(16px)' : 'translateX(0)' }}
+                    />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+      )}
+    </div>
+  )
+
+  const takeButton = (
+    <button
+      onClick={startCountdown}
+      disabled={countdown !== null}
+      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-md bg-white hover:bg-neutral-100 active:bg-neutral-200 disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-medium transition-colors duration-150"
+    >
+      {countdown !== null ? (
+        <>
+          <span className="text-base font-bold tabular-nums">{countdown}</span>
+          <span>Taking photo…</span>
+        </>
+      ) : (
+        <>
+          <Download size={14} />
+          Take Picture
+        </>
+      )}
+    </button>
+  )
+
   return (
-    <div className="flex h-screen bg-black text-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Hidden video element */}
+    <div className="flex flex-col md:flex-row h-screen bg-black text-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       <video ref={videoRef} className="hidden" playsInline />
 
-      {/* Canvas area */}
-      <div className="flex-1 overflow-hidden">
-        <canvas
-          ref={canvasRef}
-          className="w-full h-full object-cover"
-          width={640}
-          height={480}
-        />
+      {/* Canvas */}
+      <div className="flex-1 overflow-hidden min-h-0">
+        <canvas ref={canvasRef} className="w-full h-full object-cover" width={640} height={480} />
       </div>
 
-      {/* Right Sidebar */}
-      <aside className="w-72 flex flex-col shrink-0 border-l border-neutral-800 bg-neutral-950">
-        {/* Sidebar header */}
+      {/* Desktop sidebar */}
+      <aside className="hidden md:flex w-72 flex-col shrink-0 border-l border-neutral-800 bg-neutral-950">
         <div className="px-5 py-4 border-b border-neutral-800 flex items-center gap-2.5">
           <Camera size={15} className="text-neutral-400" />
           <span className="text-sm font-medium tracking-tight">Cam Effect</span>
         </div>
-
-        {/* Scrollable controls */}
-        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-7">
-          {/* Effect selector */}
-          <section>
-            <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2.5">Effect</p>
-            <div className="space-y-0.5">
-              {EFFECTS.map(e => (
-                <button
-                  key={e.id}
-                  onClick={() => setEffect(e.id)}
-                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-md text-sm transition-all duration-150 ${
-                    effect === e.id
-                      ? 'bg-white text-black font-medium'
-                      : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
-                  }`}
-                >
-                  <span>{e.label}</span>
-                  {effect === e.id && (
-                    <span className="text-[11px] text-neutral-500 font-normal">{e.desc}</span>
-                  )}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {/* Per-effect sliders */}
-          {effect !== 'none' && (
-            <section>
-              <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-4">Parameters</p>
-              <div className="space-y-6">
-                {effect === 'grayscale' && (
-                  <ParamSlider
-                    label="Contrast"
-                    hint="Amplifies difference from mid-gray"
-                    value={params.grayscaleContrast}
-                    min={0.5} max={2} step={0.05}
-                    display={params.grayscaleContrast.toFixed(2) + '×'}
-                    onChange={v => setParam('grayscaleContrast', v)}
-                  />
-                )}
-                {effect === 'dither' && (
-                  <>
-                    {/* Dither mode */}
-                    <div>
-                      <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2">Mode</p>
-                      <div className="grid grid-cols-2 gap-1">
-                        {DITHER_MODES.map(m => (
-                          <button
-                            key={m.id}
-                            onClick={() => setParam('ditherMode', m.id)}
-                            className={`px-2.5 py-1.5 rounded text-xs transition-all duration-150 ${
-                              params.ditherMode === m.id
-                                ? 'bg-white text-black font-medium'
-                                : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700 hover:text-white'
-                            }`}
-                          >
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Threshold — Bayer only */}
-                    {params.ditherMode === 'bayer' && (
-                      <ParamSlider
-                        label="Threshold"
-                        hint="Bayer matrix sensitivity"
-                        value={params.ditherScale}
-                        min={0.1} max={2} step={0.05}
-                        display={params.ditherScale.toFixed(2) + '×'}
-                        onChange={v => setParam('ditherScale', v)}
-                      />
-                    )}
-
-                    {/* Cell size — non-bayer modes */}
-                    {params.ditherMode !== 'bayer' && (
-                      <ParamSlider
-                        label="Cell Size"
-                        hint="Sampling grid resolution"
-                        value={params.ditherCellSize}
-                        min={4} max={32} step={2}
-                        display={params.ditherCellSize + 'px'}
-                        onChange={v => setParam('ditherCellSize', v)}
-                      />
-                    )}
-
-                    {/* Foreground color */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm text-neutral-200">Foreground</span>
-                        <span className="text-xs font-mono text-neutral-400">{params.ditherFgColor}</span>
-                      </div>
-                      <div className="flex items-center gap-2.5">
-                        <input
-                          type="color"
-                          value={params.ditherFgColor}
-                          onChange={e => setParam('ditherFgColor', e.target.value)}
-                          className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
-                        />
-                        <div className="flex gap-1.5 flex-wrap">
-                          {['#ffffff','#00ff00','#ff4444','#44aaff','#ffaa00','#ff44ff'].map(c => (
-                            <button key={c} onClick={() => setParam('ditherFgColor', c)} title={c}
-                              style={{ background: c }}
-                              className={`w-5 h-5 rounded-sm transition-all ${params.ditherFgColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Background color */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm text-neutral-200">Background</span>
-                        <span className="text-xs font-mono text-neutral-400">{params.ditherBgColor}</span>
-                      </div>
-                      <div className="flex items-center gap-2.5">
-                        <input
-                          type="color"
-                          value={params.ditherBgColor}
-                          onChange={e => setParam('ditherBgColor', e.target.value)}
-                          className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
-                        />
-                        <div className="flex gap-1.5 flex-wrap">
-                          {['#000000','#0a0a0a','#001a00','#00001a','#1a0000','#1a001a'].map(c => (
-                            <button key={c} onClick={() => setParam('ditherBgColor', c)} title={c}
-                              style={{ background: c, border: '1px solid #333' }}
-                              className={`w-5 h-5 rounded-sm transition-all ${params.ditherBgColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-                {effect === 'ascii' && (
-                  <>
-                    {/* Char mode selector */}
-                    <div>
-                      <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2">Char Set</p>
-                      <div className="grid grid-cols-2 gap-1">
-                        {ASCII_CHAR_MODES.map(m => (
-                          <button
-                            key={m.id}
-                            onClick={() => setParam('asciiCharMode', m.id)}
-                            className={`px-2.5 py-1.5 rounded text-xs transition-all duration-150 ${
-                              params.asciiCharMode === m.id
-                                ? 'bg-white text-black font-medium'
-                                : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700 hover:text-white'
-                            }`}
-                          >
-                            {m.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Color picker */}
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm text-neutral-200">Font Color</span>
-                        <span className="text-xs font-mono text-neutral-400">{params.asciiColor}</span>
-                      </div>
-                      <p className="text-[11px] text-neutral-600 mb-2.5">Character fill color</p>
-                      <div className="flex items-center gap-2.5">
-                        <input
-                          type="color"
-                          value={params.asciiColor}
-                          onChange={e => setParam('asciiColor', e.target.value)}
-                          className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
-                        />
-                        <div className="flex gap-1.5 flex-wrap">
-                          {['#00ff00','#ffffff','#ff4444','#44aaff','#ffaa00','#ff44ff'].map(c => (
-                            <button
-                              key={c}
-                              onClick={() => setParam('asciiColor', c)}
-                              title={c}
-                              style={{ background: c }}
-                              className={`w-5 h-5 rounded-sm transition-all ${
-                                params.asciiColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''
-                              }`}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Font / block size */}
-                    <ParamSlider
-                      label="Font Size"
-                      hint="Character cell resolution"
-                      value={params.asciiBlockSize}
-                      min={4} max={24} step={2}
-                      display={params.asciiBlockSize + 'px'}
-                      onChange={v => setParam('asciiBlockSize', v)}
-                    />
-                  </>
-                )}
-                {effect === 'pixelate' && (
-                  <ParamSlider
-                    label="Pixel Size"
-                    hint="Block averaging resolution"
-                    value={params.pixelSize}
-                    min={2} max={64} step={2}
-                    display={params.pixelSize + 'px'}
-                    onChange={v => setParam('pixelSize', v)}
-                  />
-                )}
-              </div>
-            </section>
-          )}
-        </div>
-
-        {/* Footer — Take Picture */}
-        <div className="px-5 py-4 border-t border-neutral-800">
-          <button
-            onClick={startCountdown}
-            disabled={countdown !== null}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-md bg-white hover:bg-neutral-100 active:bg-neutral-200 disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-medium transition-colors duration-150"
-          >
-            {countdown !== null ? (
-              <>
-                <span className="text-base font-bold tabular-nums">{countdown}</span>
-                <span>Taking photo…</span>
-              </>
-            ) : (
-              <>
-                <Download size={14} />
-                Take Picture
-              </>
-            )}
-          </button>
+        {sidebarControls}
+        <div className="px-5 py-4 border-t border-neutral-800 space-y-3">
+          {takeButton}
+          <p className="text-center text-[10px] text-neutral-600">© Vito 2026</p>
         </div>
       </aside>
+
+      {/* Mobile bottom sheet */}
+      <div className="md:hidden flex flex-col shrink-0 border-t border-neutral-800 bg-neutral-950">
+        {/* Always-visible bar */}
+        <div className="flex items-center gap-3 px-4 py-3">
+          <button
+            onClick={() => setMobileOpen(o => !o)}
+            className="flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-sm transition-colors shrink-0"
+          >
+            {mobileOpen ? <X size={14} /> : <SlidersHorizontal size={14} />}
+            {mobileOpen ? 'Close' : 'Controls'}
+          </button>
+          <div className="flex-1">{takeButton}</div>
+        </div>
+        {/* Expandable controls */}
+        {mobileOpen && (
+          <div className="border-t border-neutral-800 max-h-[55vh] overflow-y-auto">
+            {sidebarControls}
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+// RGB Shift — broken VHS channel offset
+function applyRGBShift(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  p: EffectParams,
+) {
+  const src = ctx.getImageData(0, 0, width, height)
+  const srcData = src.data
+
+  const out = ctx.createImageData(width, height)
+  const outData = out.data
+
+  const ox = p.rgbShiftX
+  const oy = p.rgbShiftY
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const di = (y * width + x) * 4
+
+      // Red channel: shift right+down
+      const rx = Math.min(width - 1, x + ox)
+      const ry = Math.min(height - 1, y + oy)
+      const ri = (ry * width + rx) * 4
+
+      // Green channel: no shift (anchor)
+      const gi = di
+
+      // Blue channel: shift left+up
+      const bx = Math.max(0, x - ox)
+      const by2 = Math.max(0, y - oy)
+      const bi = (by2 * width + bx) * 4
+
+      outData[di]     = srcData[ri]         // R
+      outData[di + 1] = srcData[gi + 1]     // G
+      outData[di + 2] = srcData[bi + 2]     // B
+      outData[di + 3] = 255
+    }
+  }
+
+  // Random horizontal glitch slices
+  const glitchCount = Math.round(p.rgbGlitchLines)
+  for (let i = 0; i < glitchCount; i++) {
+    const sliceY = Math.floor(Math.random() * height)
+    const sliceH = Math.floor(Math.random() * 6) + 1
+    const sliceOX = Math.floor((Math.random() - 0.5) * ox * 3)
+
+    for (let sy = sliceY; sy < Math.min(sliceY + sliceH, height); sy++) {
+      for (let x = 0; x < width; x++) {
+        const sx = Math.max(0, Math.min(width - 1, x + sliceOX))
+        const si = (sy * width + sx) * 4
+        const di = (sy * width + x) * 4
+        outData[di]     = outData[si]
+        outData[di + 1] = outData[si + 1]
+        outData[di + 2] = outData[si + 2]
+      }
+    }
+  }
+
+  ctx.putImageData(out, 0, 0)
+
+  // CRT scanlines overlay
+  if (p.rgbScanlines) {
+    ctx.save()
+    ctx.globalAlpha = 0.18
+    ctx.fillStyle = '#000000'
+    for (let y = 0; y < height; y += 2) {
+      ctx.fillRect(0, y, width, 1)
+    }
+    ctx.restore()
+  }
 }
 
 function ParamSlider({
@@ -468,8 +594,11 @@ function ParamSlider({
         min={min}
         max={max}
         step={step}
-        value={value}
-        onChange={e => onChange(parseFloat(e.target.value))}
+        value={typeof value === 'number' && !isNaN(value) ? value : min}
+        onChange={e => {
+          const v = parseFloat(e.target.value)
+          if (!isNaN(v)) onChange(v)
+        }}
         className="w-full h-[3px] rounded-full appearance-none cursor-pointer accent-white bg-neutral-700"
       />
       <div className="flex justify-between mt-1.5">
