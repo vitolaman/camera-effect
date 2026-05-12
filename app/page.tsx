@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Camera, Download, SlidersHorizontal, X } from 'lucide-react'
 
-type EffectType = 'none' | 'grayscale' | 'dither' | 'ascii' | 'pixelate' | 'rgbshift'
+type EffectType = 'none' | 'grayscale' | 'dither' | 'ascii' | 'pixelate' | 'rgbshift' | 'heatvision'
 type AsciiCharMode = 'gradient' | 'numbers'
 type DitherMode = 'bayer' | 'halftone' | 'dotcross' | 'line'
 
@@ -21,6 +21,8 @@ const ASCII_CHAR_MODES: { id: AsciiCharMode; label: string }[] = [
 
 interface EffectParams {
   grayscaleContrast: number
+  heatIntensity: number
+  heatBands: number
   ditherMode: DitherMode
   ditherScale: number
   ditherCellSize: number
@@ -38,6 +40,8 @@ interface EffectParams {
 
 const DEFAULT_PARAMS: EffectParams = {
   grayscaleContrast: 1,
+  heatIntensity: 1,
+  heatBands: 9,
   ditherMode: 'bayer',
   ditherScale: 1,
   ditherCellSize: 8,
@@ -56,6 +60,7 @@ const DEFAULT_PARAMS: EffectParams = {
 const EFFECTS: { id: EffectType; label: string; desc: string }[] = [
   { id: 'none',      label: 'None',      desc: 'Raw camera feed' },
   { id: 'grayscale', label: 'Grayscale', desc: 'Luminance conversion' },
+  { id: 'heatvision', label: 'Heat Vision', desc: 'Thermal false color map' },
   { id: 'dither',    label: 'Dither',    desc: 'Ordered Bayer matrix' },
   { id: 'ascii',     label: 'ASCII',     desc: 'Character art' },
   { id: 'pixelate',  label: 'Pixelate',  desc: 'Block averaging' },
@@ -65,10 +70,13 @@ const EFFECTS: { id: EffectType; label: string; desc: string }[] = [
 export default function CameraPage() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const frameImageRef = useRef<HTMLImageElement | null>(null)
   const [effect, setEffect] = useState<EffectType>('dither')
   const [params, setParams] = useState<EffectParams>(DEFAULT_PARAMS)
+  const [showFrame, setShowFrame] = useState(true)
   const effectRef = useRef<EffectType>('dither')
   const paramsRef = useRef<EffectParams>(DEFAULT_PARAMS)
+  const showFrameRef = useRef(true)
   const animationFrameRef = useRef<number>(0)
   const [countdown, setCountdown] = useState<number | null>(null)
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -76,6 +84,13 @@ export default function CameraPage() {
 
   useEffect(() => { effectRef.current = effect }, [effect])
   useEffect(() => { paramsRef.current = params }, [params])
+  useEffect(() => { showFrameRef.current = showFrame }, [showFrame])
+
+  useEffect(() => {
+    const frame = new Image()
+    frame.src = '/forareason.png'
+    frameImageRef.current = frame
+  }, [])
 
   const setParam = <K extends keyof EffectParams>(key: K, value: EffectParams[K]) => {
     setParams(prev => ({ ...prev, [key]: value }))
@@ -141,6 +156,9 @@ export default function CameraPage() {
           if (currentEffect === 'grayscale') {
             applyGrayscale(data, p.grayscaleContrast)
             ctx.putImageData(imageData, 0, 0)
+          } else if (currentEffect === 'heatvision') {
+            applyHeatVision(data, p.heatIntensity, p.heatBands)
+            ctx.putImageData(imageData, 0, 0)
           } else if (currentEffect === 'dither') {
             applyDither(ctx, imageData, canvas.width, canvas.height, p)
           } else if (currentEffect === 'ascii') {
@@ -151,6 +169,10 @@ export default function CameraPage() {
           } else if (currentEffect === 'rgbshift') {
             applyRGBShift(ctx, canvas.width, canvas.height, p)
           }
+        }
+
+        if (showFrameRef.current && frameImageRef.current?.complete) {
+          ctx.drawImage(frameImageRef.current, canvas.width - 200, canvas.height - 120, 200, 100)
         }
       }
 
@@ -230,6 +252,26 @@ export default function CameraPage() {
                 display={params.grayscaleContrast.toFixed(2) + '×'}
                 onChange={v => setParam('grayscaleContrast', v)}
               />
+            )}
+            {effect === 'heatvision' && (
+              <>
+                <ParamSlider
+                  label="Intensity"
+                  hint="How aggressively temperatures are separated"
+                  value={params.heatIntensity}
+                  min={0.6} max={2.5} step={0.05}
+                  display={params.heatIntensity.toFixed(2) + '×'}
+                  onChange={v => setParam('heatIntensity', v)}
+                />
+                <ParamSlider
+                  label="Bands"
+                  hint="Number of visible thermal color steps"
+                  value={params.heatBands}
+                  min={4} max={16} step={1}
+                  display={String(Math.round(params.heatBands))}
+                  onChange={v => setParam('heatBands', v)}
+                />
+              </>
             )}
             {effect === 'dither' && (
               <>
@@ -421,6 +463,27 @@ export default function CameraPage() {
           </div>
         </section>
       )}
+
+      <section>
+        <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-3">Overlay</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm text-neutral-200">Frame</p>
+            <p className="text-[11px] text-neutral-600">Show forareason overlay</p>
+          </div>
+          <button
+            onClick={() => setShowFrame(v => !v)}
+            className={`w-10 h-5.5 rounded-full relative transition-colors duration-200 ${showFrame ? 'bg-white' : 'bg-neutral-700'}`}
+            style={{ width: 36, height: 20 }}
+            aria-label="Toggle frame overlay"
+          >
+            <span
+              className="absolute top-0.5 rounded-full bg-black transition-transform duration-200"
+              style={{ width: 16, height: 16, left: 2, transform: showFrame ? 'translateX(16px)' : 'translateX(0)' }}
+            />
+          </button>
+        </div>
+      </section>
     </div>
   )
 
@@ -623,6 +686,53 @@ function applyGrayscale(data: Uint8ClampedArray, contrast: number) {
     data[i] = adjusted
     data[i + 1] = adjusted
     data[i + 2] = adjusted
+  }
+}
+
+// Apply heat-vision false-color effect
+function applyHeatVision(data: Uint8ClampedArray, intensity: number, bandCount: number) {
+  const bands = Math.max(2, Math.round(bandCount))
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)))
+  const mix = (a: number, b: number, t: number) => a + (b - a) * t
+
+  const palette = [
+    [6, 18, 78],
+    [0, 84, 188],
+    [0, 190, 120],
+    [255, 225, 0],
+    [255, 78, 0],
+    [255, 255, 255],
+  ] as const
+
+  const samplePalette = (t: number) => {
+    const scaled = t * (palette.length - 1)
+    const index = Math.min(palette.length - 2, Math.max(0, Math.floor(scaled)))
+    const localT = scaled - index
+    const [r1, g1, b1] = palette[index]
+    const [r2, g2, b2] = palette[index + 1]
+    return [
+      mix(r1, r2, localT),
+      mix(g1, g2, localT),
+      mix(b1, b2, localT),
+    ]
+  }
+
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]
+    const g = data[i + 1]
+    const b = data[i + 2]
+
+    const gray = 0.299 * r + 0.587 * g + 0.114 * b
+    let t = Math.pow(gray / 255, 1 / Math.max(0.35, intensity))
+    t = Math.round(t * (bands - 1)) / (bands - 1)
+    const [nr, ng, nb] = samplePalette(t)
+
+    const hotBoost = Math.max(0, gray - 160) / 95
+    const coolShadow = Math.max(0, 95 - gray) / 95
+
+    data[i] = clamp(nr + hotBoost * 18 - coolShadow * 10)
+    data[i + 1] = clamp(ng + hotBoost * 24 - coolShadow * 4)
+    data[i + 2] = clamp(nb + hotBoost * 18 + coolShadow * 22)
   }
 }
 
