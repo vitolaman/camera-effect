@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { Camera, Download, SlidersHorizontal, X } from 'lucide-react'
 
-type EffectType = 'none' | 'grayscale' | 'dither' | 'ascii' | 'pixelate' | 'rgbshift' | 'heatvision'
+type EffectType = 'none' | 'grayscale' | 'negative' | 'dither' | 'ascii' | 'pixelate' | 'rgbshift' | 'heatvision'
 type AsciiCharMode = 'gradient' | 'numbers'
 type DitherMode = 'bayer' | 'halftone' | 'dotcross' | 'line'
+type PhotoSize = 'normal' | 'square' | 'story'
 
 const DITHER_MODES: { id: DitherMode; label: string }[] = [
   { id: 'bayer',    label: 'Bayer' },
@@ -17,6 +18,12 @@ const DITHER_MODES: { id: DitherMode; label: string }[] = [
 const ASCII_CHAR_MODES: { id: AsciiCharMode; label: string }[] = [
   { id: 'gradient', label: 'Gradient' },
   { id: 'numbers',  label: 'Numbers' },
+]
+
+const PHOTO_SIZES: { id: PhotoSize; label: string; desc: string }[] = [
+  { id: 'normal', label: 'Normal', desc: 'Use the device camera aspect ratio' },
+  { id: 'square', label: 'Square', desc: '1:1 crop' },
+  { id: 'story', label: 'Instagram Story', desc: '9:16 crop' },
 ]
 
 interface EffectParams {
@@ -60,6 +67,7 @@ const DEFAULT_PARAMS: EffectParams = {
 const EFFECTS: { id: EffectType; label: string; desc: string }[] = [
   { id: 'none',      label: 'None',      desc: 'Raw camera feed' },
   { id: 'grayscale', label: 'Grayscale', desc: 'Luminance conversion' },
+  { id: 'negative',  label: 'Negative',  desc: 'Film negative inversion' },
   { id: 'heatvision', label: 'Heat Vision', desc: 'Thermal false color map' },
   { id: 'dither',    label: 'Dither',    desc: 'Ordered Bayer matrix' },
   { id: 'ascii',     label: 'ASCII',     desc: 'Character art' },
@@ -72,9 +80,11 @@ export default function CameraPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const frameImageRef = useRef<HTMLImageElement | null>(null)
   const [effect, setEffect] = useState<EffectType>('dither')
+  const [photoSize, setPhotoSize] = useState<PhotoSize>('normal')
   const [params, setParams] = useState<EffectParams>(DEFAULT_PARAMS)
   const [showFrame, setShowFrame] = useState(true)
   const effectRef = useRef<EffectType>('dither')
+  const photoSizeRef = useRef<PhotoSize>('normal')
   const paramsRef = useRef<EffectParams>(DEFAULT_PARAMS)
   const showFrameRef = useRef(true)
   const animationFrameRef = useRef<number>(0)
@@ -83,6 +93,7 @@ export default function CameraPage() {
   const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => { effectRef.current = effect }, [effect])
+  useEffect(() => { photoSizeRef.current = photoSize }, [photoSize])
   useEffect(() => { paramsRef.current = params }, [params])
   useEffect(() => { showFrameRef.current = showFrame }, [showFrame])
 
@@ -134,17 +145,31 @@ export default function CameraPage() {
 
     const render = () => {
       if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        // Set canvas size to match video
-        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-          canvas.width = video.videoWidth
-          canvas.height = video.videoHeight
+        const frame = getPhotoFrame(
+          video.videoWidth,
+          video.videoHeight,
+          photoSizeRef.current,
+        )
+
+        if (canvas.width !== frame.targetWidth || canvas.height !== frame.targetHeight) {
+          canvas.width = frame.targetWidth
+          canvas.height = frame.targetHeight
         }
 
         // Draw video to canvas (flipped horizontally to remove mirror effect)
-        ctx.save()
-        ctx.scale(-1, 1)
-        ctx.drawImage(video, -canvas.width, 0)
-        ctx.restore()
+        ctx.setTransform(-1, 0, 0, 1, canvas.width, 0)
+        ctx.drawImage(
+          video,
+          frame.sourceX,
+          frame.sourceY,
+          frame.sourceWidth,
+          frame.sourceHeight,
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+        )
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
 
         // Apply selected effect using refs so no restart needed
         const currentEffect = effectRef.current
@@ -155,6 +180,9 @@ export default function CameraPage() {
 
           if (currentEffect === 'grayscale') {
             applyGrayscale(data, p.grayscaleContrast)
+            ctx.putImageData(imageData, 0, 0)
+          } else if (currentEffect === 'negative') {
+            applyNegative(data)
             ctx.putImageData(imageData, 0, 0)
           } else if (currentEffect === 'heatvision') {
             applyHeatVision(data, p.heatIntensity, p.heatBands)
@@ -238,8 +266,30 @@ export default function CameraPage() {
         </div>
       </section>
 
+      <section>
+        <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-2.5">Photo Size</p>
+        <div className="space-y-0.5">
+          {PHOTO_SIZES.map(size => (
+            <button
+              key={size.id}
+              onClick={() => setPhotoSize(size.id)}
+              className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-md text-sm transition-all duration-150 ${
+                photoSize === size.id
+                  ? 'bg-white text-black font-medium'
+                  : 'text-neutral-400 hover:bg-neutral-800 hover:text-white'
+              }`}
+            >
+              <span>{size.label}</span>
+              {photoSize === size.id && (
+                <span className="text-[11px] text-neutral-500 font-normal text-right">{size.desc}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      </section>
+
       {/* Per-effect parameters */}
-      {effect !== 'none' && (
+      {effect !== 'none' && effect !== 'negative' && (
         <section>
           <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest mb-4">Parameters</p>
           <div className="space-y-6">
@@ -513,7 +563,7 @@ export default function CameraPage() {
 
       {/* Canvas */}
       <div className="flex-1 overflow-hidden min-h-0">
-        <canvas ref={canvasRef} className="w-full h-full object-cover" width={640} height={480} />
+        <canvas ref={canvasRef} className="w-full h-full object-contain" width={640} height={480} />
       </div>
 
       {/* Desktop sidebar */}
@@ -551,6 +601,54 @@ export default function CameraPage() {
       </div>
     </div>
   )
+}
+
+function getPhotoFrame(videoWidth: number, videoHeight: number, photoSize: PhotoSize) {
+  if (!videoWidth || !videoHeight) {
+    return {
+      targetWidth: 640,
+      targetHeight: 480,
+      sourceX: 0,
+      sourceY: 0,
+      sourceWidth: 640,
+      sourceHeight: 480,
+    }
+  }
+
+  if (photoSize === 'normal') {
+    return {
+      targetWidth: videoWidth,
+      targetHeight: videoHeight,
+      sourceX: 0,
+      sourceY: 0,
+      sourceWidth: videoWidth,
+      sourceHeight: videoHeight,
+    }
+  }
+
+  const targetAspect = photoSize === 'square' ? 1 : 9 / 16
+  const videoAspect = videoWidth / videoHeight
+
+  let sourceWidth = videoWidth
+  let sourceHeight = videoHeight
+
+  if (videoAspect > targetAspect) {
+    sourceWidth = Math.round(videoHeight * targetAspect)
+  } else {
+    sourceHeight = Math.round(videoWidth / targetAspect)
+  }
+
+  const sourceX = Math.max(0, Math.round((videoWidth - sourceWidth) / 2))
+  const sourceY = Math.max(0, Math.round((videoHeight - sourceHeight) / 2))
+
+  return {
+    targetWidth: sourceWidth,
+    targetHeight: sourceHeight,
+    sourceX,
+    sourceY,
+    sourceWidth,
+    sourceHeight,
+  }
 }
 
 // RGB Shift — broken VHS channel offset
@@ -686,6 +784,15 @@ function applyGrayscale(data: Uint8ClampedArray, contrast: number) {
     data[i] = adjusted
     data[i + 1] = adjusted
     data[i + 2] = adjusted
+  }
+}
+
+// Apply negative film effect
+function applyNegative(data: Uint8ClampedArray) {
+  for (let i = 0; i < data.length; i += 4) {
+    data[i] = 255 - data[i]
+    data[i + 1] = 255 - data[i + 1]
+    data[i + 2] = 255 - data[i + 2]
   }
 }
 
