@@ -27,7 +27,6 @@ const PHOTO_SIZES: { id: PhotoSize; label: string; desc: string }[] = [
 ]
 
 const APP_GATE_HASH = 'fe604600879c2512397964183c848337e9ba366ead980e4542dc7d0adf2b9ccd'
-const APP_GATE_STORAGE_KEY = 'cam_effect_unlocked'
 
 interface EffectParams {
   grayscaleContrast: number
@@ -110,15 +109,6 @@ export default function CameraPage() {
     frameImageRef.current = frame
   }, [])
 
-  useEffect(() => {
-    try {
-      const unlocked = window.localStorage.getItem(APP_GATE_STORAGE_KEY) === '1'
-      setIsUnlocked(unlocked)
-    } catch {
-      setIsUnlocked(false)
-    }
-  }, [])
-
   const setParam = <K extends keyof EffectParams>(key: K, value: EffectParams[K]) => {
     setParams(prev => ({ ...prev, [key]: value }))
   }
@@ -162,11 +152,6 @@ export default function CameraPage() {
       if (hashedInput === APP_GATE_HASH) {
         setIsUnlocked(true)
         setPasswordInput('')
-        try {
-          window.localStorage.setItem(APP_GATE_STORAGE_KEY, '1')
-        } catch {
-          // Ignore localStorage failure and keep session-only unlock.
-        }
       } else {
         setPasswordError('Wrong password')
       }
@@ -245,7 +230,7 @@ export default function CameraPage() {
         }
 
         if (showFrameRef.current && frameImageRef.current?.complete) {
-          const frameSize = 120
+          const frameSize = 150
           const frameMargin = 20
           ctx.drawImage(
             frameImageRef.current,
@@ -427,7 +412,7 @@ export default function CameraPage() {
                       className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
                     />
                     <div className="flex gap-1.5 flex-wrap">
-                      {['#ffffff','#00ff00','#ff4444','#44aaff','#ffaa00','#ff44ff'].map(c => (
+                      {['#ff4444','#ffffff','#00ff00','#44aaff','#ffaa00','#ff44ff'].map(c => (
                         <button key={c} onClick={() => setParam('ditherFgColor', c)} title={c}
                           style={{ background: c }}
                           className={`w-5 h-5 rounded-sm transition-all ${params.ditherFgColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
@@ -447,7 +432,7 @@ export default function CameraPage() {
                       className="w-8 h-8 rounded cursor-pointer bg-transparent border-0 p-0"
                     />
                     <div className="flex gap-1.5 flex-wrap">
-                      {['#000000','#0a0a0a','#001a00','#00001a','#1a0000','#1a001a'].map(c => (
+                      {['#2624ae','#0a0a0a','#001a00','#00001a','#1a0000','#1a001a'].map(c => (
                         <button key={c} onClick={() => setParam('ditherBgColor', c)} title={c}
                           style={{ background: c, border: '1px solid #333' }}
                           className={`w-5 h-5 rounded-sm transition-all ${params.ditherBgColor === c ? 'ring-1 ring-white ring-offset-1 ring-offset-neutral-950' : ''}`}
@@ -597,10 +582,7 @@ export default function CameraPage() {
       className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-md bg-white hover:bg-neutral-100 active:bg-neutral-200 disabled:opacity-60 disabled:cursor-not-allowed text-black text-sm font-medium transition-colors duration-150"
     >
       {countdown !== null ? (
-        <>
-          <span className="text-base font-bold tabular-nums">{countdown}</span>
-          <span>Taking photo…</span>
-        </>
+        <span>Taking photo…</span>
       ) : (
         <>
           <Download size={14} />
@@ -611,7 +593,7 @@ export default function CameraPage() {
   )
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-black text-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+    <div className="relative flex flex-col md:flex-row h-screen overflow-hidden bg-black text-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
       {!isUnlocked && (
         <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center px-5">
           <form
@@ -658,8 +640,16 @@ export default function CameraPage() {
       <video ref={videoRef} className="hidden" playsInline />
 
       {/* Canvas */}
-      <div className="flex-1 overflow-hidden min-h-0">
+      <div className="relative flex-1 overflow-hidden min-h-0">
         <canvas ref={canvasRef} className="w-full h-full object-contain" width={640} height={480} />
+
+        {countdown !== null && (
+          <div className="absolute inset-0 z-20 pointer-events-none flex items-center justify-center">
+            <div className="w-28 h-28 rounded-full border border-white/25 bg-black/50 backdrop-blur-sm flex items-center justify-center">
+              <span className="text-5xl font-semibold leading-none tabular-nums text-white">{countdown}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Desktop sidebar */}
@@ -675,22 +665,24 @@ export default function CameraPage() {
         </div>
       </aside>
 
-      {/* Mobile bottom sheet */}
-      <div className="md:hidden flex flex-col shrink-0 border-t border-neutral-800 bg-neutral-950">
-        {/* Always-visible bar */}
-        <div className="flex items-center gap-3 px-4 py-3">
-          <button
-            onClick={() => setMobileOpen(o => !o)}
-            className="flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-sm transition-colors shrink-0"
-          >
-            {mobileOpen ? <X size={14} /> : <SlidersHorizontal size={14} />}
-            {mobileOpen ? 'Close' : 'Controls'}
-          </button>
-          <div className="flex-1">{takeButton}</div>
+      {/* Mobile controls overlay */}
+      <div className="md:hidden absolute inset-x-0 bottom-0 z-30 pointer-events-none">
+        <div className="pointer-events-auto border-t border-neutral-800 bg-neutral-950/95 backdrop-blur-sm">
+          <div className="flex items-center gap-3 px-4 py-3">
+            <button
+              onClick={() => setMobileOpen(o => !o)}
+              className="flex items-center gap-2 px-3 py-2 rounded-md bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-sm transition-colors shrink-0"
+            >
+              {mobileOpen ? <X size={14} /> : <SlidersHorizontal size={14} />}
+              {mobileOpen ? 'Close' : 'Controls'}
+            </button>
+            <div className="flex-1">{takeButton}</div>
+          </div>
         </div>
+
         {/* Expandable controls */}
         {mobileOpen && (
-          <div className="border-t border-neutral-800 max-h-[55vh] overflow-y-auto">
+          <div className="pointer-events-auto border-t border-neutral-800 bg-neutral-950/97 backdrop-blur-sm max-h-[55vh] overflow-y-auto">
             {sidebarControls}
           </div>
         )}
