@@ -26,6 +26,9 @@ const PHOTO_SIZES: { id: PhotoSize; label: string; desc: string }[] = [
   { id: 'story', label: 'Instagram Story', desc: '9:16 crop' },
 ]
 
+const APP_GATE_HASH = 'fe604600879c2512397964183c848337e9ba366ead980e4542dc7d0adf2b9ccd'
+const APP_GATE_STORAGE_KEY = 'cam_effect_unlocked'
+
 interface EffectParams {
   grayscaleContrast: number
   heatIntensity: number
@@ -91,6 +94,10 @@ export default function CameraPage() {
   const [countdown, setCountdown] = useState<number | null>(null)
   const countdownRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [isUnlocked, setIsUnlocked] = useState(false)
+  const [passwordInput, setPasswordInput] = useState('')
+  const [passwordError, setPasswordError] = useState('')
+  const [isCheckingPassword, setIsCheckingPassword] = useState(false)
 
   useEffect(() => { effectRef.current = effect }, [effect])
   useEffect(() => { photoSizeRef.current = photoSize }, [photoSize])
@@ -101,6 +108,15 @@ export default function CameraPage() {
     const frame = new Image()
     frame.src = '/forareason.png'
     frameImageRef.current = frame
+  }, [])
+
+  useEffect(() => {
+    try {
+      const unlocked = window.localStorage.getItem(APP_GATE_STORAGE_KEY) === '1'
+      setIsUnlocked(unlocked)
+    } catch {
+      setIsUnlocked(false)
+    }
   }, [])
 
   const setParam = <K extends keyof EffectParams>(key: K, value: EffectParams[K]) => {
@@ -134,8 +150,37 @@ export default function CameraPage() {
     countdownRef.current = setTimeout(tick, 1000)
   }
 
+  const submitGatePassword = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    if (isCheckingPassword) return
+
+    setPasswordError('')
+    setIsCheckingPassword(true)
+
+    try {
+      const hashedInput = await sha256(passwordInput.trim())
+      if (hashedInput === APP_GATE_HASH) {
+        setIsUnlocked(true)
+        setPasswordInput('')
+        try {
+          window.localStorage.setItem(APP_GATE_STORAGE_KEY, '1')
+        } catch {
+          // Ignore localStorage failure and keep session-only unlock.
+        }
+      } else {
+        setPasswordError('Wrong password')
+      }
+    } catch {
+      setPasswordError('Unable to verify password')
+    } finally {
+      setIsCheckingPassword(false)
+    }
+  }
+
   // Start camera stream and render loop
   useEffect(() => {
+    if (!isUnlocked) return
+
     const canvas = canvasRef.current
     const video = videoRef.current
     if (!canvas || !video) return
@@ -200,7 +245,15 @@ export default function CameraPage() {
         }
 
         if (showFrameRef.current && frameImageRef.current?.complete) {
-          ctx.drawImage(frameImageRef.current, canvas.width - 200, canvas.height - 120, 200, 100)
+          const frameSize = 120
+          const frameMargin = 20
+          ctx.drawImage(
+            frameImageRef.current,
+            canvas.width - frameSize - frameMargin,
+            canvas.height - frameSize - frameMargin,
+            frameSize,
+            frameSize,
+          )
         }
       }
 
@@ -239,7 +292,7 @@ export default function CameraPage() {
         tracks.forEach((track) => track.stop())
       }
     }
-  }, [])
+  }, [isUnlocked])
 
   const sidebarControls = (
     <div className="flex-1 overflow-y-auto px-5 py-5 space-y-7">
@@ -559,6 +612,49 @@ export default function CameraPage() {
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-black text-white" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {!isUnlocked && (
+        <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-sm flex items-center justify-center px-5">
+          <form
+            onSubmit={submitGatePassword}
+            className="w-full max-w-sm border border-neutral-800 bg-neutral-950 rounded-xl p-6 space-y-5"
+          >
+            <div className="space-y-1.5">
+              <p className="text-[11px] font-semibold text-neutral-500 uppercase tracking-widest">Protected Access</p>
+              <h1 className="text-xl font-semibold tracking-tight">Enter Password</h1>
+              <p className="text-sm text-neutral-400">Input password to open camera app.</p>
+            </div>
+
+            <div>
+              <label htmlFor="gate-password" className="sr-only">Password</label>
+              <input
+                id="gate-password"
+                type="password"
+                value={passwordInput}
+                onChange={e => {
+                  setPasswordInput(e.target.value)
+                  if (passwordError) setPasswordError('')
+                }}
+                autoFocus
+                className="w-full rounded-md border border-neutral-700 bg-black px-3 py-2.5 text-sm text-white placeholder:text-neutral-500 focus:outline-none focus:ring-1 focus:ring-white"
+                placeholder="Password"
+                autoComplete="current-password"
+              />
+              {passwordError && (
+                <p className="mt-2 text-xs text-red-400">{passwordError}</p>
+              )}
+            </div>
+
+            <button
+              type="submit"
+              disabled={isCheckingPassword || !passwordInput.trim()}
+              className="w-full rounded-md bg-white text-black text-sm font-medium py-2.5 hover:bg-neutral-100 active:bg-neutral-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isCheckingPassword ? 'Checking…' : 'Open App'}
+            </button>
+          </form>
+        </div>
+      )}
+
       <video ref={videoRef} className="hidden" playsInline />
 
       {/* Canvas */}
@@ -601,6 +697,14 @@ export default function CameraPage() {
       </div>
     </div>
   )
+}
+
+async function sha256(input: string): Promise<string> {
+  const encoder = new TextEncoder()
+  const data = encoder.encode(input)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  const bytes = new Uint8Array(digest)
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
 function getPhotoFrame(videoWidth: number, videoHeight: number, photoSize: PhotoSize) {
